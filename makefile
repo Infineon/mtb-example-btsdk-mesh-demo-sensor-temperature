@@ -190,6 +190,6 @@ CY_BT_APP_TOOLS=BTSpy ClientControlMesh MeshClient
 
 -include internal.mk
 ifeq ($(filter $(TARGET),$(SUPPORTED_TARGETS)),)
-$(error TARGET $(TARGET) not supported for this code example)
+$(error TARGET $(TARGET) not supported for this application. Edit SUPPORTED_TARGETS in the code example makefile to add new BSPs)
 endif
 include $(CY_TOOLS_DIR)/make/start.mk

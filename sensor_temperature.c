@@ -64,6 +64,8 @@
 #include "wiced_thermistor.h"
 #include "wiced_hal_nvram.h"
 #include "wiced_sleep.h"
+#include "wiced_hal_adc.h"
+#include "wiced_platform.h"
 
 #include "wiced_bt_cfg.h"
 extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
@@ -88,7 +90,40 @@ extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
 
 #define MESH_TEMPERATURE_SENSOR_CADENCE_NVRAM_ID        WICED_NVRAM_VSID_START
 
+/******************************************************************************
+ *                                Constants
+ ******************************************************************************/
+#ifndef THERMISTOR_aux_0_TRIGGER_OUT
 
+#ifdef CYW20719B1
+#define THERMISTOR_PIN  ADC_INPUT_P10                       /*CYW920719Q40EVB-01 has P10 connected to Thermistor*/
+#endif
+
+#ifdef CYW20735B1
+#define THERMISTOR_PIN  ADC_INPUT_P8                        /*CYW920735Q60EVB-01 has P8 connected to Thermistor*/
+#endif
+
+#ifdef CYW20835B1
+#define THERMISTOR_PIN  ADC_INPUT_P8                        /*CYW920835M2EVB-01 has P8 connected to Thermistor*/
+#endif
+
+#ifdef CYW20819A1
+#define THERMISTOR_PIN  ADC_INPUT_P8                        /*CYW920819EVB-02 has P8 connected to Thermistor*/
+#endif
+
+#ifdef CYW20820A1
+#define THERMISTOR_PIN  ADC_INPUT_P8                        /*CYW920820EVB-02 has P8 connected to Thermistor*/
+#endif
+
+#ifdef CYW20719B2
+#define THERMISTOR_PIN  ADC_INPUT_P10                        /*CYW920719B2Q40EVB-01 has P10 connected to Thermistor*/
+#endif
+
+#else
+
+#define THERMISTOR_PIN THERMISTOR_aux_0_TRIGGER_OUT
+
+#endif
 /******************************************************
  *          Structures
  ******************************************************/
@@ -442,7 +477,17 @@ void mesh_sensor_server_restart_timer(wiced_bt_mesh_core_config_sensor_t *p_sens
  */
 int8_t mesh_sensor_get_temperature_8(void)
 {
-    int16_t temp_celsius_100 = thermistor_read();
+    thermistor_cfg_t thermistor_cfg;
+    memset(&thermistor_cfg, 0, sizeof(thermistor_cfg_t));
+#if defined (CYBT_213043_MESH) // this BSP uses thermistor_ncp15xv103_lib
+    thermistor_cfg.high_pin       = ADC_INPUT_P14;
+    thermistor_cfg.low_pin        = ADC_INPUT_P11;
+    thermistor_cfg.adc_power_pin  = WICED_P09;
+#else
+    thermistor_cfg.high_pin = THERMISTOR_PIN; /* Input channel to measure DC voltage(temperature)-> GPIO 10 -> J12.1, J14.1 */
+#endif
+
+    int16_t temp_celsius_100 = thermistor_read(&thermistor_cfg);
 
     if (temp_celsius_100 < -6400)
     {
