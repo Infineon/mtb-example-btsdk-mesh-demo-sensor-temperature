@@ -405,7 +405,7 @@ wiced_bool_t mesh_app_notify_period_set(uint8_t element_idx, uint16_t company_id
 void mesh_app_lpn_sleep(uint32_t timeout_ms)
 {
 #if defined(LOW_POWER_NODE) && (LOW_POWER_NODE == 1)
-    if (wiced_sleep_enter_hid_off(timeout_ms, 0, 0) != WICED_SUCCESS)
+    if (wiced_sleep_enter_hid_off(timeout_ms, WICED_HAL_GPIO_PIN_UNUSED, WICED_GPIO_ACTIVE_LOW) != WICED_SUCCESS)
     {
         WICED_BT_TRACE("Entering HID-Off failed\n\r");
     }
