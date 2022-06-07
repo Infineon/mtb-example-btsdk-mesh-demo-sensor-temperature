@@ -1,5 +1,5 @@
 #
-# Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+# Copyright 2016-2022, Cypress Semiconductor Corporation (an Infineon company) or
 # an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 #
 # This software, including source code, documentation and related
@@ -50,7 +50,8 @@ SUPPORTED_TARGETS = \
   CYW920819EVB-02 \
   CYBT-213043-MESH \
   CYBLE-343072-MESH \
-  CYW920820EVB-02
+  CYW920820EVB-02 \
+  CYW920820M2EVB-01
 
 #
 # Advanced Configuration

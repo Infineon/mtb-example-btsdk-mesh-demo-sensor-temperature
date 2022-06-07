@@ -1,5 +1,5 @@
 /*
-* Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2016-2022, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -159,12 +159,13 @@ uint8_t mesh_prop_fw_version[WICED_BT_MESH_PROPERTY_LEN_DEVICE_FIRMWARE_REVISION
 uint8_t mesh_system_id[8]                                                           = { 0xbb, 0xb8, 0xa1, 0x80, 0x5f, 0x9f, 0x91, 0x71 };
 
 // Present Ambient Temperature property uses Temperature 8 format, i.e. 0.5 degree Celsius.
-int8_t        mesh_sensor_current_temperature = 42; // 21 degree Celsius
-int8_t        mesh_sensor_sent_value = 0;           //
-uint32_t      mesh_sensor_sent_time;                // time stamp when temperature was published
-uint32_t      mesh_sensor_publish_period = 0;       // publish period in msec
-uint32_t      mesh_sensor_fast_publish_period = 0;  // publish period in msec when values are outside of limit
-uint32_t      mesh_sensor_sleep_timeout = 0;        // timeout value in msec that is currently running
+int8_t        mesh_sensor_current_value = 42;           // 21 degree Celsius
+int8_t        mesh_sensor_sent_value = 0;               // Value sent as a result of publication or GET
+int8_t        mesh_sensor_pub_value = 0;                // Value sent as a result of publication
+uint32_t      mesh_sensor_pub_time;                     // time stamp when temperature was published
+uint32_t      mesh_sensor_publish_period = 0;           // publish period in msec
+uint32_t      mesh_sensor_fast_publish_period = 0;      // publish period in msec when values are outside of limit
+uint32_t      mesh_sensor_measure_min_interval = 3000;  // Measure temperature at least every 3 seconds
 wiced_timer_t mesh_sensor_cadence_timer;
 
 // Optional setting for the temperature sensor, the Total Device Runtime, in Time Hour 24 format
@@ -324,6 +325,18 @@ void mesh_app_init(wiced_bool_t is_provisioned)
     wiced_bt_cfg_settings.device_name = (uint8_t *)"Temperature Sensor";
     wiced_bt_cfg_settings.gatt_cfg.appearance = APPEARANCE_SENSOR_TEMPERATURE;
 
+    mesh_prop_fw_version[0] = 0x30 + (WICED_SDK_MAJOR_VER / 10);
+    mesh_prop_fw_version[1] = 0x30 + (WICED_SDK_MAJOR_VER % 10);
+    mesh_prop_fw_version[2] = 0x30 + (WICED_SDK_MINOR_VER / 10);
+    mesh_prop_fw_version[3] = 0x30 + (WICED_SDK_MINOR_VER % 10);
+    mesh_prop_fw_version[4] = 0x30 + (WICED_SDK_REV_NUMBER / 10);
+    mesh_prop_fw_version[5] = 0x30 + (WICED_SDK_REV_NUMBER % 10);
+    // convert 12 bits of BUILD_NUMMBER to two base64 characters big endian
+    mesh_prop_fw_version[6] = wiced_bt_mesh_base64_encode_6bits((uint8_t)(WICED_SDK_BUILD_NUMBER >> 6) & 0x3f);
+    mesh_prop_fw_version[7] = wiced_bt_mesh_base64_encode_6bits((uint8_t)WICED_SDK_BUILD_NUMBER & 0x3f);
+
+    WICED_BT_TRACE("Temp App Init provisioned:$D\n", is_provisioned);
+
     // Adv Data is fixed. Spec allows to put URI, Name, Appearance and Tx Power in the Scan Response Data.
     if (!is_provisioned)
     {
@@ -344,28 +357,18 @@ void mesh_app_init(wiced_bool_t is_provisioned)
         num_elem++;
 
         wiced_bt_mesh_set_raw_scan_response_data(num_elem, adv_elem);
+
+        wiced_bt_mesh_model_sensor_server_init(MESH_SENSOR_SERVER_ELEMENT_INDEX, mesh_sensor_server_report_handler, mesh_sensor_server_config_change_handler, is_provisioned);
+        return;
     }
 
     p_sensor = &mesh_config.elements[MESH_SENSOR_SERVER_ELEMENT_INDEX].sensors[MESH_TEMPERATURE_SENSOR_INDEX];
-
-    mesh_prop_fw_version[0] = 0x30 + (WICED_SDK_MAJOR_VER / 10);
-    mesh_prop_fw_version[1] = 0x30 + (WICED_SDK_MAJOR_VER % 10);
-    mesh_prop_fw_version[2] = 0x30 + (WICED_SDK_MINOR_VER / 10);
-    mesh_prop_fw_version[3] = 0x30 + (WICED_SDK_MINOR_VER % 10);
-    mesh_prop_fw_version[4] = 0x30 + (WICED_SDK_REV_NUMBER / 10);
-    mesh_prop_fw_version[5] = 0x30 + (WICED_SDK_REV_NUMBER % 10);
-    // convert 12 bits of BUILD_NUMMBER to two base64 characters big endian
-    mesh_prop_fw_version[6] = wiced_bt_mesh_base64_encode_6bits((uint8_t)(WICED_SDK_BUILD_NUMBER >> 6) & 0x3f);
-    mesh_prop_fw_version[7] = wiced_bt_mesh_base64_encode_6bits((uint8_t)WICED_SDK_BUILD_NUMBER & 0x3f);
-
-    if (!is_provisioned)
-        return;
 
     // When we are coming out of HID OFF and if we are provisioned, need to send data
     thermistor_init();
 
     // read the initial temperature
-    mesh_sensor_current_temperature = mesh_sensor_get_temperature_8();
+    mesh_sensor_current_value = mesh_sensor_get_temperature_8();
 
     // initialize the cadence timer.  Need a timer for each element because each sensor model can be
     // configured for different publication period.  This app has only one sensor.
@@ -376,10 +379,10 @@ void mesh_app_init(wiced_bool_t is_provisioned)
 
     wiced_bt_mesh_model_sensor_server_init(MESH_SENSOR_SERVER_ELEMENT_INDEX, mesh_sensor_server_report_handler, mesh_sensor_server_config_change_handler, is_provisioned);
 
-    mesh_sensor_sent_value = mesh_sensor_current_temperature;
-    mesh_sensor_sent_time  = cur_time;
+    mesh_sensor_pub_value = mesh_sensor_current_value;
+    mesh_sensor_pub_time  = cur_time;
 
-    WICED_BT_TRACE("Pub value:%d time:%d\n", mesh_sensor_sent_value, mesh_sensor_sent_time);
+    WICED_BT_TRACE("Pub value:%d time:%d\n", mesh_sensor_pub_value, mesh_sensor_pub_time);
     wiced_bt_mesh_model_sensor_server_data(MESH_SENSOR_SERVER_ELEMENT_INDEX, WICED_BT_MESH_PROPERTY_PRESENT_AMBIENT_TEMPERATURE, NULL);
 }
 
@@ -433,17 +436,7 @@ void mesh_sensor_server_restart_timer(wiced_bt_mesh_core_config_sensor_t *p_sens
     {
         // The thermistor is not interrupt driven.  If client configured sensor to send notification when
         // the value changes, we will need to check periodically if the condition has been satisfied.
-        // The cadence.min_interval can be used because we do not need to send data more often than that.
-        if ((p_sensor->cadence.min_interval != 0) &&
-            ((p_sensor->cadence.trigger_delta_up != 0) || (p_sensor->cadence.trigger_delta_down != 0)))
-        {
-            timeout = p_sensor->cadence.min_interval;
-        }
-        else
-        {
-            WICED_BT_TRACE("sensor restart timer period:%d\n", mesh_sensor_publish_period);
-            return;
-        }
+        timeout = p_sensor->cadence.min_interval < mesh_sensor_measure_min_interval ? p_sensor->cadence.min_interval : mesh_sensor_measure_min_interval;
     }
     else
     {
@@ -551,7 +544,7 @@ void mesh_sensor_server_report_handler(uint16_t event, uint8_t element_idx, void
     {
     case WICED_BT_MESH_SENSOR_GET:
         // measure the temperature and update it to mesh_config
-        mesh_sensor_sent_value = mesh_sensor_get_temperature_8();
+        mesh_sensor_pub_value = mesh_sensor_get_temperature_8();
 
         // tell mesh models library that data is ready to be shipped out, the library will get data from mesh_config
         wiced_bt_mesh_model_sensor_server_data(element_idx, p_sensor_get->property_id, p_ref_data);
@@ -607,17 +600,16 @@ void mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg)
     wiced_bool_t pub_needed = WICED_FALSE;
     uint32_t cur_time = wiced_bt_mesh_core_get_tick_count();
 
-    mesh_sensor_current_temperature = mesh_sensor_get_temperature_8();
+    mesh_sensor_current_value = mesh_sensor_get_temperature_8();
 
-    if ((cur_time - mesh_sensor_sent_time) < p_sensor->cadence.min_interval)
+    if ((cur_time - mesh_sensor_pub_time) < p_sensor->cadence.min_interval)
     {
-        WICED_BT_TRACE("time since last pub:%d interval:%d\n", cur_time - mesh_sensor_sent_time, p_sensor->cadence.min_interval);
-        wiced_start_timer(&mesh_sensor_cadence_timer, p_sensor->cadence.min_interval - cur_time + mesh_sensor_sent_time);
+        WICED_BT_TRACE("time since last pub:%d less then cadence interval:%d\n", cur_time - mesh_sensor_pub_time, p_sensor->cadence.min_interval);
     }
     else
     {
         // check if publication timer expired
-        if ((mesh_sensor_publish_period != 0) && (cur_time - mesh_sensor_sent_time >= mesh_sensor_publish_period))
+        if ((mesh_sensor_publish_period != 0) && (cur_time - mesh_sensor_pub_time >= mesh_sensor_publish_period))
         {
             WICED_BT_TRACE("Pub needed period\n");
             pub_needed = WICED_TRUE;
@@ -629,10 +621,10 @@ void mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg)
             if (!p_sensor->cadence.trigger_type_percentage)
             {
                 WICED_BT_TRACE("Native cur value:%d sent:%d delta:%d/%d\n",
-                        mesh_sensor_current_temperature, mesh_sensor_sent_value, p_sensor->cadence.trigger_delta_up, p_sensor->cadence.trigger_delta_down);
+                        mesh_sensor_current_value, mesh_sensor_pub_value, p_sensor->cadence.trigger_delta_up, p_sensor->cadence.trigger_delta_down);
 
-                if (((p_sensor->cadence.trigger_delta_up != 0)   && ((int32_t)mesh_sensor_current_temperature >= (int32_t)(mesh_sensor_sent_value + p_sensor->cadence.trigger_delta_up))) ||
-                    ((p_sensor->cadence.trigger_delta_down != 0) && ((int32_t)mesh_sensor_current_temperature <= (int32_t)(mesh_sensor_sent_value - p_sensor->cadence.trigger_delta_down))))
+                if (((p_sensor->cadence.trigger_delta_up != 0)   && ((int32_t)mesh_sensor_current_value >= (int32_t)(mesh_sensor_pub_value + p_sensor->cadence.trigger_delta_up))) ||
+                    ((p_sensor->cadence.trigger_delta_down != 0) && ((int32_t)mesh_sensor_current_value <= (int32_t)(mesh_sensor_pub_value - p_sensor->cadence.trigger_delta_down))))
                 {
                     WICED_BT_TRACE("Pub needed native value\n");
                     pub_needed = WICED_TRUE;
@@ -641,21 +633,21 @@ void mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg)
             else
             {
                 // need to calculate percentage of the increase or decrease.  The deltas are in 0.01%.
-                if ((p_sensor->cadence.trigger_delta_up != 0) && (mesh_sensor_current_temperature > mesh_sensor_sent_value))
+                if ((p_sensor->cadence.trigger_delta_up != 0) && (mesh_sensor_current_value > mesh_sensor_pub_value))
                 {
-                    WICED_BT_TRACE("Delta up:%d\n", ((uint32_t)(mesh_sensor_current_temperature - mesh_sensor_sent_value) * 10000 / mesh_sensor_current_temperature));
-                    if (((uint32_t)(mesh_sensor_current_temperature - mesh_sensor_sent_value) * 10000 / mesh_sensor_current_temperature) > p_sensor->cadence.trigger_delta_up)
+                    WICED_BT_TRACE("Delta up:%d\n", ((uint32_t)(mesh_sensor_current_value - mesh_sensor_pub_value) * 10000 / mesh_sensor_current_value));
+                    if (((uint32_t)(mesh_sensor_current_value - mesh_sensor_pub_value) * 10000 / mesh_sensor_current_value) > p_sensor->cadence.trigger_delta_up)
                     {
-                        WICED_BT_TRACE("Pub needed percent delta up:%d\n", ((mesh_sensor_current_temperature - mesh_sensor_sent_value) * 10000 / mesh_sensor_current_temperature));
+                        WICED_BT_TRACE("Pub needed percent delta up:%d\n", ((mesh_sensor_current_value - mesh_sensor_pub_value) * 10000 / mesh_sensor_current_value));
                         pub_needed = WICED_TRUE;
                     }
                 }
-                else if ((p_sensor->cadence.trigger_delta_down != 0) && (mesh_sensor_current_temperature < mesh_sensor_sent_value))
+                else if ((p_sensor->cadence.trigger_delta_down != 0) && (mesh_sensor_current_value < mesh_sensor_pub_value))
                 {
-                    WICED_BT_TRACE("Delta down:%d\n", ((uint32_t)(mesh_sensor_sent_value - mesh_sensor_current_temperature) * 10000 / mesh_sensor_current_temperature));
-                    if (((uint32_t)(mesh_sensor_sent_value - mesh_sensor_current_temperature) * 10000 / mesh_sensor_current_temperature) > p_sensor->cadence.trigger_delta_down)
+                    WICED_BT_TRACE("Delta down:%d\n", ((uint32_t)(mesh_sensor_pub_value - mesh_sensor_current_value) * 10000 / mesh_sensor_current_value));
+                    if (((uint32_t)(mesh_sensor_pub_value - mesh_sensor_current_value) * 10000 / mesh_sensor_current_value) > p_sensor->cadence.trigger_delta_down)
                     {
-                        WICED_BT_TRACE("Pub needed percent delta down:%d\n", ((mesh_sensor_sent_value - mesh_sensor_current_temperature) * 10000 / mesh_sensor_current_temperature));
+                        WICED_BT_TRACE("Pub needed percent delta down:%d\n", ((mesh_sensor_pub_value - mesh_sensor_current_value) * 10000 / mesh_sensor_current_value));
                         pub_needed = WICED_TRUE;
                     }
                 }
@@ -665,13 +657,13 @@ void mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg)
         if (!pub_needed && (mesh_sensor_fast_publish_period != 0))
         {
             // check if fast publish period expired
-            if (cur_time - mesh_sensor_sent_time >= mesh_sensor_fast_publish_period)
+            if (cur_time - mesh_sensor_pub_time >= mesh_sensor_fast_publish_period)
             {
                 // if cadence high is more than cadence low, to publish, the value should be in range
-                if (p_sensor->cadence.fast_cadence_high >= p_sensor->cadence.fast_cadence_low)
+                if (p_sensor->cadence.fast_cadence_high > p_sensor->cadence.fast_cadence_low)
                 {
-                    if ((mesh_sensor_current_temperature >= p_sensor->cadence.fast_cadence_low) &&
-                        (mesh_sensor_current_temperature <= p_sensor->cadence.fast_cadence_high))
+                    if ((mesh_sensor_current_value > p_sensor->cadence.fast_cadence_low) &&
+                        (mesh_sensor_current_value <= p_sensor->cadence.fast_cadence_high))
                     {
                         WICED_BT_TRACE("Pub needed in range\n");
                         pub_needed = WICED_TRUE;
@@ -679,36 +671,45 @@ void mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg)
                 }
                 else if (p_sensor->cadence.fast_cadence_high < p_sensor->cadence.fast_cadence_low)
                 {
-                    if ((mesh_sensor_current_temperature > p_sensor->cadence.fast_cadence_low) ||
-                        (mesh_sensor_current_temperature < p_sensor->cadence.fast_cadence_high))
+                    if ((mesh_sensor_current_value > p_sensor->cadence.fast_cadence_low) ||
+                        (mesh_sensor_current_value < p_sensor->cadence.fast_cadence_high))
                     {
                         WICED_BT_TRACE("Pub needed out of range\n");
                         pub_needed = WICED_TRUE;
                     }
                 }
+                else
+                {
+                    // p_sensor->cadence.fast_cadence_high == p_sensor->cadence.fast_cadence_low)
+                    // publish if current value is the same as cadence high/low
+                    if (mesh_sensor_current_value == p_sensor->cadence.fast_cadence_low)
+                    {
+                        WICED_BT_TRACE("Pub needed equal\n");
+                        pub_needed = WICED_TRUE;
+                    }
+                }
             }
         }
-        /*
-        if (!pub_needed)
+        // We will still send publication if Deltas are not set, but measured value has changed.
+        if (!pub_needed && (mesh_sensor_publish_period == 0) && (p_sensor->cadence.trigger_delta_up == 0) && (p_sensor->cadence.trigger_delta_down == 0))
         {
-           if (((p_sensor->cadence.trigger_delta_up == 0) && (mesh_sensor_current_temperature > mesh_sensor_sent_value)) ||
-               ((p_sensor->cadence.trigger_delta_down == 0) && (mesh_sensor_current_temperature < mesh_sensor_sent_value)))
+            if (mesh_sensor_current_value != mesh_sensor_pub_value)
             {
                WICED_BT_TRACE("Pub needed new value no deltas\n");
                pub_needed = WICED_TRUE;
             }
         }
-        */
         if (pub_needed)
         {
-            mesh_sensor_sent_value  = mesh_sensor_current_temperature;
-            mesh_sensor_sent_time   = cur_time;
+            mesh_sensor_sent_value = mesh_sensor_current_value;
+            mesh_sensor_pub_value  = mesh_sensor_current_value;
+            mesh_sensor_pub_time   = cur_time;
 
-            WICED_BT_TRACE("Pub value:%d time:%d\n", mesh_sensor_sent_value, mesh_sensor_sent_time);
+            WICED_BT_TRACE("Pub value:%d time:%d\n", mesh_sensor_sent_value, mesh_sensor_pub_time);
             wiced_bt_mesh_model_sensor_server_data(MESH_SENSOR_SERVER_ELEMENT_INDEX, WICED_BT_MESH_PROPERTY_PRESENT_AMBIENT_TEMPERATURE, NULL);
         }
-        mesh_sensor_server_restart_timer(p_sensor);
     }
+    mesh_sensor_server_restart_timer(p_sensor);
 }
 
 /*
