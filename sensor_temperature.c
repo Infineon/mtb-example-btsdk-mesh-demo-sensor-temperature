@@ -35,7 +35,7 @@
  *
  * This demo application shows a  implementation of a temperature sensor.
  * The app is based on the snip/mesh/mesh_sensor_server sample which
- * implements BLE Mesh Sensor Server model.
+ * implements LE Mesh Sensor Server model.
  *
  * Features demonstrated
  *  - Temperature measurement using the on board Thermistor on the EVK
@@ -75,7 +75,6 @@ extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
  ******************************************************/
 #define MESH_PID                0x3122
 #define MESH_VID                0x0002
-#define MESH_CACHE_REPLAY_SIZE  0x0008
 
 #define MESH_TEMP_SENSOR_PROPERTY_ID                    WICED_BT_MESH_PROPERTY_PRESENT_AMBIENT_TEMPERATURE
 #define MESH_TEMP_SENSOR_VALUE_LEN                      WICED_BT_MESH_PROPERTY_LEN_PRESENT_AMBIENT_TEMPERATURE
@@ -97,10 +96,6 @@ extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
 
 #ifdef CYW20719B1
 #define THERMISTOR_PIN  ADC_INPUT_P10                       /*CYW920719Q40EVB-01 has P10 connected to Thermistor*/
-#endif
-
-#ifdef CYW20735B1
-#define THERMISTOR_PIN  ADC_INPUT_P8                        /*CYW920735Q60EVB-01 has P8 connected to Thermistor*/
 #endif
 
 #ifdef CYW20835B1
@@ -137,18 +132,13 @@ static void         mesh_app_lpn_sleep(uint32_t timeout);
 static void         mesh_app_factory_reset(void);
 static void         mesh_sensor_server_restart_timer(wiced_bt_mesh_core_config_sensor_t *p_sensor);
 static void         mesh_sensor_server_report_handler(uint16_t event, uint8_t element_idx, void *p_get_data, void *p_ref_data);
-static void         mesh_sensor_server_config_change_handler(uint8_t element_idx, uint16_t event, uint16_t property_id, uint16_t setting_property_id);
-static void         mesh_sensor_server_send_status(wiced_bt_mesh_event_t *p_event, uint16_t property_id);
-static void         mesh_sensor_server_process_cadence_changed(uint8_t element_idx, uint16_t property_id);
-static void         mesh_sensor_server_process_setting_changed(uint8_t element_idx, uint16_t property_id, uint16_t setting_property_id);
+static void         mesh_sensor_server_config_change_handler(uint8_t element_idx, uint16_t event, void* p_data);
+static void         mesh_sensor_server_process_cadence_changed(uint8_t element_idx, wiced_bt_mesh_sensor_cadence_status_data_t* p_data);
+static void         mesh_sensor_server_process_setting_changed(uint8_t element_idx, wiced_bt_mesh_sensor_setting_status_data_t* p_data);
 static int8_t       mesh_sensor_get_temperature_8(void);
 static void         mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg);
 static void         mesh_sensor_server_enter_hid_off(uint32_t timeout_ms);
 
-#ifdef HCI_CONTROL
-static void         mesh_sensor_hci_event_send_cadence_set(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_sensor_cadence_set_data_t *p_set);
-static void         mesh_sensor_hci_event_send_setting_set(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_sensor_setting_set_data_t *p_set);
-#endif
 
 /******************************************************
  *          Variables Definitions
@@ -250,7 +240,6 @@ wiced_bt_mesh_core_config_t  mesh_config =
     .company_id         = MESH_COMPANY_ID_CYPRESS,                  // Company identifier assigned by the Bluetooth SIG
     .product_id         = MESH_PID,                                 // Vendor-assigned product identifier
     .vendor_id          = MESH_VID,                                 // Vendor-assigned product version identifier
-    .replay_cache_size  = MESH_CACHE_REPLAY_SIZE,                   // Number of replay protection entries, i.e. maximum number of mesh devices that can send application messages to this device.
 #if defined(LOW_POWER_NODE) && (LOW_POWER_NODE == 1)
     .features           = WICED_BT_MESH_CORE_FEATURE_BIT_LOW_POWER, // A bit field indicating the device features. In Low Power mode no Relay, no Proxy and no Friend
     .friend_cfg         =                                           // Empty Configuration of the Friend Feature
@@ -503,31 +492,18 @@ int8_t mesh_sensor_get_temperature_8(void)
 /*
  * Process the configuration changes set by the Sensor Client.
  */
-//void mesh_sensor_server_config_change_handler(uint8_t element_idx, uint16_t event, void *p_data)
-void mesh_sensor_server_config_change_handler(uint8_t element_idx, uint16_t event, uint16_t property_id, uint16_t setting_property_id)
+void mesh_sensor_server_config_change_handler(uint8_t element_idx, uint16_t event, void *p_data)
 {
-#if defined HCI_CONTROL
-    wiced_bt_mesh_hci_event_t *p_hci_event;
-#endif
     WICED_BT_TRACE("mesh_sensor_server_config_change_handler msg: %d\n", event);
 
     switch (event)
     {
-
-    case WICED_BT_MESH_SENSOR_CADENCE_SET:
-#if defined HCI_CONTROL
-//        if ((p_hci_event = wiced_bt_mesh_create_hci_event(p_event)) != NULL)
-//            mesh_sensor_hci_event_send_cadence_set(p_hci_event, (wiced_bt_mesh_sensor_cadence_set_data_t *)p_data);
-#endif
-        mesh_sensor_server_process_cadence_changed(element_idx, property_id);
+    case WICED_BT_MESH_SENSOR_CADENCE_STATUS:
+        mesh_sensor_server_process_cadence_changed(element_idx, (wiced_bt_mesh_sensor_cadence_status_data_t*) p_data);
         break;
 
-    case WICED_BT_MESH_SENSOR_SETTING_SET:
-#if defined HCI_CONTROL
-//        if ((p_hci_event = wiced_bt_mesh_create_hci_event(p_event)) != NULL)
-//            mesh_sensor_hci_event_send_setting_set(p_hci_event, (wiced_bt_mesh_sensor_setting_set_data_t *)p_data);
-#endif
-        mesh_sensor_server_process_setting_changed(element_idx, property_id, setting_property_id);
+    case WICED_BT_MESH_SENSOR_SETTING_STATUS:
+        mesh_sensor_server_process_setting_changed(element_idx, (wiced_bt_mesh_sensor_setting_status_data_t*) p_data);
         break;
     }
 }
@@ -544,7 +520,7 @@ void mesh_sensor_server_report_handler(uint16_t event, uint8_t element_idx, void
     {
     case WICED_BT_MESH_SENSOR_GET:
         // measure the temperature and update it to mesh_config
-        mesh_sensor_pub_value = mesh_sensor_get_temperature_8();
+        mesh_sensor_sent_value = mesh_sensor_get_temperature_8();
 
         // tell mesh models library that data is ready to be shipped out, the library will get data from mesh_config
         wiced_bt_mesh_model_sensor_server_data(element_idx, p_sensor_get->property_id, p_ref_data);
@@ -565,14 +541,14 @@ void mesh_sensor_server_report_handler(uint16_t event, uint8_t element_idx, void
 /*
  * Process cadence change
  */
-void mesh_sensor_server_process_cadence_changed(uint8_t element_idx, uint16_t property_id)
+void mesh_sensor_server_process_cadence_changed(uint8_t element_idx, wiced_bt_mesh_sensor_cadence_status_data_t* p_data)
 {
     wiced_bt_mesh_core_config_sensor_t *p_sensor;
     uint8_t written_byte = 0;
     wiced_result_t status;
     p_sensor = &mesh_config.elements[element_idx].sensors[MESH_TEMPERATURE_SENSOR_INDEX];
 
-    WICED_BT_TRACE("cadence changed property id:%04x\n", property_id);
+    WICED_BT_TRACE("cadence changed property id:%04x\n", p_data->property_id);
     WICED_BT_TRACE("Fast cadence period divisor:%d\n", p_sensor->cadence.fast_cadence_period_divisor);
     WICED_BT_TRACE("Is trigger type percent:%d\n", p_sensor->cadence.trigger_type_percentage);
     WICED_BT_TRACE("Trigger delta up:%d\n", p_sensor->cadence.trigger_delta_up);
@@ -715,7 +691,7 @@ void mesh_sensor_publish_timer_callback(TIMER_PARAM_TYPE arg)
 /*
  * Process setting change
  */
-void mesh_sensor_server_process_setting_changed(uint8_t element_idx, uint16_t property_id, uint16_t setting_property_id)
+void mesh_sensor_server_process_setting_changed(uint8_t element_idx, wiced_bt_mesh_sensor_setting_status_data_t* p_data)
 {
-    WICED_BT_TRACE("settings changed  property id of sensor = %x , sensor prop id = %x \n", property_id, setting_property_id);
+    WICED_BT_TRACE("settings changed property id of sensor = %x , sensor prop id = %x \n", p_data->property_id, p_data->setting.setting_property_id);
 }
